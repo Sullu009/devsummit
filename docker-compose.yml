@@ -1,0 +1,356 @@
+x-python-service-env: &python-service-env
+  JWT_SECRET: ${JWT_SECRET}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+  CORS_ORIGINS: '["http://localhost:3000"]'
+
+services:
+  # ---------------------------------------------------------------- infra
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
+    ports:
+      - "5432:5432"
+    healthcheck:
+      # IMPORTANT: pg_isready with no -d defaults to checking a database
+      # named after -U (i.e. "eventsphere"), which doesn't exist -- only
+      # "postgres" (POSTGRES_DB above) does. That mismatch is what produced
+      # `FATAL: database "eventsphere" does not exist` and made this
+      # healthcheck fail/flap, which in turn meant `condition: service_healthy`
+      # dependents below could start against a Postgres that wasn't really
+      # ready, or restart repeatedly. Always check the real bootstrap db.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672" # management UI: http://localhost:15672
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ------------------------------------------------------------------------
+  # MIGRATION JOBS
+  #
+  # Each of these is a one-shot container: same image as its corresponding
+  # service, but with `command:` overridden to run ONLY `alembic upgrade
+  # head` against that service's own database, then exit. It has no
+  # `restart:` policy (defaults to "no"), so a failure does NOT loop --
+  # `docker compose up` will just report that container as exited
+  # non-zero, and the corresponding app service (which depends on it via
+  # `condition: service_completed_successfully`) will correctly refuse to
+  # start rather than racing an unfinished/failed migration.
+  #
+  # This is what actually fixes the DuplicateObject / enum-already-exists
+  # errors: previously, `alembic upgrade head && uvicorn ...` ran inside
+  # the long-lived app container. If Postgres' healthcheck flapped (see
+  # above) and Compose restarted that container mid-migration, a second
+  # `alembic upgrade head` could start before the first one's transaction
+  # had committed its alembic_version bump -- a classic TOCTOU race where
+  # two concurrent `checkfirst=True` enum-creation calls both see "doesn't
+  # exist yet" and both try to CREATE TYPE. Splitting migration into its
+  # own short-lived, non-restarting job removes that race entirely: it
+  # runs exactly once per `docker compose up`, to completion, before any
+  # app container touches that database.
+  # ------------------------------------------------------------------------
+
+  identity-migrate:
+    build:
+      context: .
+      dockerfile: services/identity-service/Dockerfile
+    image: eventsphere/identity-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/identity_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  event-migrate:
+    build:
+      context: .
+      dockerfile: services/event-service/Dockerfile
+    image: eventsphere/event-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/event_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  booking-migrate:
+    build:
+      context: .
+      dockerfile: services/booking-service/Dockerfile
+    image: eventsphere/booking-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/booking_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  payment-migrate:
+    build:
+      context: .
+      dockerfile: services/payment-service/Dockerfile
+    image: eventsphere/payment-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/payment_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  notification-migrate:
+    build:
+      context: .
+      dockerfile: services/notification-service/Dockerfile
+    image: eventsphere/notification-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notification_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  refund-migrate:
+    build:
+      context: .
+      dockerfile: services/refund-service/Dockerfile
+    image: eventsphere/refund-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/refund_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  analytics-migrate:
+    build:
+      context: .
+      dockerfile: services/analytics-service/Dockerfile
+    image: eventsphere/analytics-service:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/analytics_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # ------------------------------------------------------------ services
+  # NOTE: none of these build their own image anymore -- they reference
+  # the `image:` already built by their `-migrate` counterpart above, and
+  # their Dockerfile CMD is now plain `uvicorn ...` (no alembic call). See
+  # each service's Dockerfile for that change.
+
+  identity-service:
+    image: eventsphere/identity-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/identity_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      identity-migrate: { condition: service_completed_successfully }
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  event-service:
+    image: eventsphere/event-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/event_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      event-migrate: { condition: service_completed_successfully }
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  booking-service:
+    image: eventsphere/booking-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/booking_db
+      REDIS_URL: redis://redis:6379/0
+      EVENT_SERVICE_URL: http://event-service:8000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      booking-migrate: { condition: service_completed_successfully }
+      event-service: { condition: service_healthy }
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  payment-service:
+    image: eventsphere/payment-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/payment_db
+      BOOKING_SERVICE_URL: http://booking-service:8000
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET}
+    depends_on:
+      postgres: { condition: service_healthy }
+      payment-migrate: { condition: service_completed_successfully }
+      booking-service: { condition: service_healthy }
+    ports:
+      - "8004:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  notification-service:
+    image: eventsphere/notification-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notification_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      notification-migrate: { condition: service_completed_successfully }
+    ports:
+      - "8005:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  refund-service:
+    image: eventsphere/refund-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/refund_db
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+      BOOKING_SERVICE_URL: http://booking-service:8000
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      refund-migrate: { condition: service_completed_successfully }
+      payment-service: { condition: service_healthy }
+      booking-service: { condition: service_healthy }
+    ports:
+      - "8006:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  analytics-service:
+    image: eventsphere/analytics-service:local
+    restart: unless-stopped
+    environment:
+      <<: *python-service-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/analytics_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      analytics-migrate: { condition: service_completed_successfully }
+    ports:
+      - "8007:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      IDENTITY_SERVICE_URL: http://identity-service:8000
+      EVENT_SERVICE_URL: http://event-service:8000
+      BOOKING_SERVICE_URL: http://booking-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+      NOTIFICATION_SERVICE_URL: http://notification-service:8000
+      REFUND_SERVICE_URL: http://refund-service:8000
+      ANALYTICS_SERVICE_URL: http://analytics-service:8000
+    depends_on:
+      identity-service: { condition: service_healthy }
+      event-service: { condition: service_healthy }
+      booking-service: { condition: service_healthy }
+      payment-service: { condition: service_healthy }
+      notification-service: { condition: service_healthy }
+      refund-service: { condition: service_healthy }
+      analytics-service: { condition: service_healthy }
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8080/api
+      NEXT_PUBLIC_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+    depends_on:
+      - api-gateway
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ticket-notch: 10px;
+}
+
+html, body {
+  background-color: #F7F5F0;
+  color: #14171C;
+}
+
+body {
+  font-family: var(--font-sans, Inter, system-ui, sans-serif);
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display, Georgia, serif);
+  letter-spacing: -0.01em;
+}
+
+.ticket-notch-right {
+  position: relative;
+}
+.ticket-notch-right::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -1px;
+  width: var(--ticket-notch);
+  height: var(--ticket-notch);
+  background: #F7F5F0;
+  border: 1px solid #DCD7C9;
+  border-radius: 999px;
+  transform: translate(50%, -50%);
+}
+
+.hairline {
+  border: 1px solid #DCD7C9;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
