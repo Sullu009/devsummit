@@ -15,26 +15,33 @@ export function Navbar() {
   return (
     <header className="hairline border-x-0 border-t-0 sticky top-0 z-40 bg-paper/95 backdrop-blur-none">
       <div className="mx-auto max-w-6xl px-6 py-4 flex items-center justify-between">
-        <Link href="/" className="font-display text-xl tracking-tight">
-          Event<span className="text-forest">Sphere</span>
+        <Link href="/" className="font-display text-xl tracking-tight flex items-center gap-1 font-bold">
+          <span className="font-mono text-indigo-600 font-extrabold text-base">&gt;_</span>
+          <span>Dev</span>
+          <span className="text-indigo-600">Summit</span>
         </Link>
 
-        <nav className="hidden md:flex items-center gap-7 text-sm">
-          <Link href="/events" className={pathname === "/events" ? "text-ink" : "text-muted hover:text-ink"}>
-            Browse Events
+        <nav className="hidden md:flex items-center gap-7 text-sm font-medium">
+          <Link href="/events" className={pathname === "/events" ? "text-ink font-semibold" : "text-muted hover:text-ink"}>
+            Conferences & Labs
           </Link>
           {user && (
-            <Link href="/my-bookings" className={pathname === "/my-bookings" ? "text-ink" : "text-muted hover:text-ink"}>
-              My Bookings
-            </Link>
+            <>
+              <Link href="/tickets" className={pathname === "/tickets" ? "text-ink font-semibold" : "text-muted hover:text-ink"}>
+                My Passes & Badges
+              </Link>
+              <Link href="/my-bookings" className={pathname === "/my-bookings" ? "text-ink font-semibold" : "text-muted hover:text-ink"}>
+                Orders
+              </Link>
+            </>
           )}
           {user && (user.role === "ORGANIZER" || user.role === "ADMIN") && (
-            <Link href="/organizer" className={isOrganizerArea ? "text-ink" : "text-muted hover:text-ink"}>
-              Organizer
+            <Link href="/organizer" className={isOrganizerArea ? "text-ink font-semibold" : "text-muted hover:text-ink"}>
+              Organizer Portal
             </Link>
           )}
           {user && user.role === "ADMIN" && (
-            <Link href="/admin" className={isAdminArea ? "text-ink" : "text-muted hover:text-ink"}>
+            <Link href="/admin" className={isAdminArea ? "text-ink font-semibold" : "text-muted hover:text-ink"}>
               Admin
             </Link>
           )}
@@ -46,7 +53,7 @@ export function Navbar() {
               <Link href="/notifications" className="text-muted hover:text-ink">
                 Notifications
               </Link>
-              <Link href="/profile" className="text-muted hover:text-ink">
+              <Link href="/profile" className="text-muted hover:text-ink font-medium">
                 {user.full_name.split(" ")[0]}
               </Link>
               <button

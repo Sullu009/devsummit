@@ -4,8 +4,8 @@ import { AuthProvider } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar";
 
 export const metadata: Metadata = {
-  title: "EventSphere",
-  description: "Discover events. Book tickets. Show up.",
+  title: "DevSummit — Tech Conference & Workshop Platform",
+  description: "Explore multi-track tech conferences, keynotes, talk abstracts, and generate official printable attendee badges.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

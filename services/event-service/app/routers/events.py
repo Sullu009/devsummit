@@ -10,8 +10,24 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..config import settings
 from ..database import get_db
-from ..models import Event, EventCategory, EventStatus, TicketType
-from ..schemas import EventCreate, EventOut, EventSummaryOut, EventUpdate, PaginatedEvents
+from ..models import Event, EventCategory, EventStatus, Session as SessionModel, Speaker, TicketType, Track
+from ..schemas import (
+    EventCreate,
+    EventOut,
+    EventSummaryOut,
+    EventUpdate,
+    FullScheduleOut,
+    PaginatedEvents,
+    ScheduleDay,
+    ScheduleSlot,
+    SessionCreate,
+    SessionOut,
+    SpeakerCreate,
+    SpeakerOut,
+    SpeakerWithSessionsOut,
+    TrackCreate,
+    TrackOut,
+)
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -131,7 +147,17 @@ def list_events(
 
 
 def _get_owned_event(event_id: str, user: CurrentUser, db: Session) -> Event:
-    event = db.get(Event, event_id, options=[selectinload(Event.ticket_types)])
+    event = db.get(
+        Event,
+        event_id,
+        options=[
+            selectinload(Event.ticket_types),
+            selectinload(Event.tracks),
+            selectinload(Event.speakers),
+            selectinload(Event.sessions).selectinload(SessionModel.track),
+            selectinload(Event.sessions).selectinload(SessionModel.speaker),
+        ],
+    )
     if not event:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
     if event.organizer_id != user.id and user.role != "ADMIN":
@@ -141,7 +167,17 @@ def _get_owned_event(event_id: str, user: CurrentUser, db: Session) -> Event:
 
 @router.get("/{event_id}", response_model=EventOut)
 def get_event(event_id: str, db: Session = Depends(get_db), user: CurrentUser | None = Depends(get_optional_user)):
-    event = db.get(Event, event_id, options=[selectinload(Event.ticket_types)])
+    event = db.get(
+        Event,
+        event_id,
+        options=[
+            selectinload(Event.ticket_types),
+            selectinload(Event.tracks),
+            selectinload(Event.speakers),
+            selectinload(Event.sessions).selectinload(SessionModel.track),
+            selectinload(Event.sessions).selectinload(SessionModel.speaker),
+        ],
+    )
     if not event:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
     is_owner = user and (user.id == event.organizer_id or user.role == "ADMIN")
@@ -212,3 +248,170 @@ def cancel_event(event_id: str, user: CurrentUser = Depends(require_roles("ORGAN
     db.refresh(event)
     _publish_safe("EventCancelled", {"event_id": event.id, "organizer_id": event.organizer_id, "title": event.title})
     return event
+
+
+# --- DevSummit Conference Extensions: Tracks, Speakers, Sessions, Schedule ---
+
+
+@router.get("/{event_id}/schedule", response_model=FullScheduleOut)
+def get_event_schedule(event_id: str, db: Session = Depends(get_db)):
+    event = db.get(
+        Event,
+        event_id,
+        options=[
+            selectinload(Event.tracks),
+            selectinload(Event.sessions).selectinload(SessionModel.track),
+            selectinload(Event.sessions).selectinload(SessionModel.speaker),
+        ],
+    )
+    if not event:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
+
+    tracks_out = [TrackOut.model_validate(t) for t in sorted(event.tracks, key=lambda t: t.order)]
+
+    # Group sessions by date
+    days_dict: dict[str, list[SessionModel]] = {}
+    for s in sorted(event.sessions, key=lambda x: x.start_time):
+        day_key = s.start_time.strftime("%Y-%m-%d")
+        days_dict.setdefault(day_key, []).append(s)
+
+    schedule_days: list[ScheduleDay] = []
+    day_count = 1
+    for day_str, day_sessions in sorted(days_dict.items(), key=lambda x: x[0]):
+        parsed_date = datetime.strptime(day_str, "%Y-%m-%d")
+        date_label = f"Day {day_count} — {parsed_date.strftime('%A, %b %d')}"
+        day_count += 1
+
+        # Group into time slots
+        slots_dict: dict[str, tuple[datetime, datetime, list[SessionModel]]] = {}
+        for s in day_sessions:
+            time_key = f"{s.start_time.isoformat()}_{s.end_time.isoformat()}"
+            if time_key not in slots_dict:
+                slots_dict[time_key] = (s.start_time, s.end_time, [])
+            slots_dict[time_key][2].append(s)
+
+        slots: list[ScheduleSlot] = []
+        for _, (st, et, slot_sessions) in sorted(slots_dict.items(), key=lambda x: x[1][0]):
+            time_label = f"{st.strftime('%I:%M %p')} - {et.strftime('%I:%M %p')}"
+            slots.append(
+                ScheduleSlot(
+                    time_label=time_label,
+                    start_time=st,
+                    end_time=et,
+                    sessions=[SessionOut.model_validate(s) for s in slot_sessions],
+                )
+            )
+
+        schedule_days.append(
+            ScheduleDay(
+                date=day_str,
+                date_label=date_label,
+                tracks=tracks_out,
+                slots=slots,
+            )
+        )
+
+    if not schedule_days:
+        schedule_days.append(
+            ScheduleDay(
+                date=event.starts_at.strftime("%Y-%m-%d"),
+                date_label=f"Day 1 — {event.starts_at.strftime('%A, %b %d')}",
+                tracks=tracks_out,
+                slots=[],
+            )
+        )
+
+    return FullScheduleOut(
+        event_id=event.id,
+        event_title=event.title,
+        days=schedule_days,
+    )
+
+
+@router.get("/{event_id}/speakers", response_model=list[SpeakerWithSessionsOut])
+def get_event_speakers(event_id: str, db: Session = Depends(get_db)):
+    event = db.get(
+        Event,
+        event_id,
+        options=[
+            selectinload(Event.speakers).selectinload(Speaker.sessions).selectinload(SessionModel.track),
+        ],
+    )
+    if not event:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
+    return sorted(event.speakers, key=lambda s: s.name)
+
+
+@router.get("/{event_id}/tracks", response_model=list[TrackOut])
+def get_event_tracks(event_id: str, db: Session = Depends(get_db)):
+    event = db.get(Event, event_id, options=[selectinload(Event.tracks)])
+    if not event:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
+    return sorted(event.tracks, key=lambda t: t.order)
+
+
+@router.post("/{event_id}/tracks", response_model=TrackOut, status_code=status.HTTP_201_CREATED)
+def add_track(event_id: str, payload: TrackCreate, user: CurrentUser = Depends(require_roles("ORGANIZER", "ADMIN")), db: Session = Depends(get_db)):
+    event = _get_owned_event(event_id, user, db)
+    track = Track(
+        event_id=event.id,
+        name=payload.name,
+        description=payload.description,
+        room_location=payload.room_location,
+        color_code=payload.color_code,
+        order=payload.order,
+    )
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+    return track
+
+
+@router.post("/{event_id}/speakers", response_model=SpeakerOut, status_code=status.HTTP_201_CREATED)
+def add_speaker(event_id: str, payload: SpeakerCreate, user: CurrentUser = Depends(require_roles("ORGANIZER", "ADMIN")), db: Session = Depends(get_db)):
+    event = _get_owned_event(event_id, user, db)
+    speaker = Speaker(
+        event_id=event.id,
+        name=payload.name,
+        role_title=payload.role_title,
+        company=payload.company,
+        bio=payload.bio,
+        avatar_url=payload.avatar_url,
+        github_url=payload.github_url,
+        twitter_url=payload.twitter_url,
+        linkedin_url=payload.linkedin_url,
+    )
+    db.add(speaker)
+    db.commit()
+    db.refresh(speaker)
+    return speaker
+
+
+@router.post("/{event_id}/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
+def add_session(event_id: str, payload: SessionCreate, user: CurrentUser = Depends(require_roles("ORGANIZER", "ADMIN")), db: Session = Depends(get_db)):
+    event = _get_owned_event(event_id, user, db)
+    session = SessionModel(
+        event_id=event.id,
+        track_id=payload.track_id,
+        speaker_id=payload.speaker_id,
+        title=payload.title,
+        abstract=payload.abstract,
+        session_type=payload.session_type,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        slides_url=payload.slides_url,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.post("/seed-demo", response_model=EventOut, status_code=status.HTTP_201_CREATED)
+def seed_demo_conference(db: Session = Depends(get_db)):
+    """Convenience endpoint to bootstrap the DevSummit flagship conference with tracks, speakers, and schedule."""
+    from ..seed_conference import seed_conference_data
+
+    event = seed_conference_data(db)
+    # Re-fetch with full relations
+    return get_event(event.id, db=db, user=None)

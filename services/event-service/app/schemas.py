@@ -85,6 +85,9 @@ class EventOut(BaseModel):
     ends_at: datetime
     created_at: datetime
     ticket_types: list[TicketTypeOut]
+    tracks: list["TrackOut"] = []
+    speakers: list["SpeakerOut"] = []
+    sessions: list["SessionOut"] = []
 
     model_config = {"from_attributes": True}
 
@@ -115,3 +118,101 @@ class PaginatedEvents(BaseModel):
 class AdjustAvailabilityRequest(BaseModel):
     quantity: int
     idempotency_key: str
+
+
+class TrackCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = ""
+    room_location: str = ""
+    color_code: str = "#6366F1"
+    order: int = 0
+
+
+class TrackOut(BaseModel):
+    id: str
+    event_id: str
+    name: str
+    description: str
+    room_location: str
+    color_code: str
+    order: int
+
+    model_config = {"from_attributes": True}
+
+
+class SpeakerCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    role_title: str = ""
+    company: str = ""
+    bio: str = ""
+    avatar_url: str = ""
+    github_url: str | None = None
+    twitter_url: str | None = None
+    linkedin_url: str | None = None
+
+
+class SpeakerOut(BaseModel):
+    id: str
+    event_id: str
+    name: str
+    role_title: str
+    company: str
+    bio: str
+    avatar_url: str
+    github_url: str | None
+    twitter_url: str | None
+    linkedin_url: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class SessionCreate(BaseModel):
+    track_id: str | None = None
+    speaker_id: str | None = None
+    title: str = Field(min_length=1, max_length=255)
+    abstract: str = ""
+    session_type: str = "TALK"
+    start_time: datetime
+    end_time: datetime
+    slides_url: str | None = None
+
+
+class SessionOut(BaseModel):
+    id: str
+    event_id: str
+    track_id: str | None
+    speaker_id: str | None
+    title: str
+    abstract: str
+    session_type: str
+    start_time: datetime
+    end_time: datetime
+    slides_url: str | None
+    track: TrackOut | None = None
+    speaker: SpeakerOut | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class SpeakerWithSessionsOut(SpeakerOut):
+    sessions: list[SessionOut] = []
+
+
+class ScheduleSlot(BaseModel):
+    time_label: str
+    start_time: datetime
+    end_time: datetime
+    sessions: list[SessionOut]
+
+
+class ScheduleDay(BaseModel):
+    date: str
+    date_label: str
+    tracks: list[TrackOut]
+    slots: list[ScheduleSlot]
+
+
+class FullScheduleOut(BaseModel):
+    event_id: str
+    event_title: str
+    days: list[ScheduleDay]

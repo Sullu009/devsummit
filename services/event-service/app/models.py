@@ -61,6 +61,9 @@ class Event(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     ticket_types: Mapped[list["TicketType"]] = relationship(back_populates="event", cascade="all, delete-orphan", order_by="TicketType.price")
+    tracks: Mapped[list["Track"]] = relationship(back_populates="event", cascade="all, delete-orphan", order_by="Track.order")
+    speakers: Mapped[list["Speaker"]] = relationship(back_populates="event", cascade="all, delete-orphan", order_by="Speaker.name")
+    sessions: Mapped[list["Session"]] = relationship(back_populates="event", cascade="all, delete-orphan", order_by="Session.start_time")
 
 
 class TicketType(Base):
@@ -91,3 +94,56 @@ class AvailabilityAdjustment(Base):
     ticket_type_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Track(Base):
+    __tablename__ = "tracks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(String(36), ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    room_location: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    color_code: Mapped[str] = mapped_column(String(30), nullable=False, default="#6366F1")
+    order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    event: Mapped[Event] = relationship(back_populates="tracks")
+    sessions: Mapped[list["Session"]] = relationship(back_populates="track", cascade="all, delete-orphan")
+
+
+class Speaker(Base):
+    __tablename__ = "speakers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(String(36), ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    role_title: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    company: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    bio: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    avatar_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    github_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    twitter_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    linkedin_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    event: Mapped[Event] = relationship(back_populates="speakers")
+    sessions: Mapped[list["Session"]] = relationship(back_populates="speaker")
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(String(36), ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    track_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tracks.id", ondelete="SET NULL"), index=True, nullable=True)
+    speaker_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("speakers.id", ondelete="SET NULL"), index=True, nullable=True)
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    abstract: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    session_type: Mapped[str] = mapped_column(String(50), nullable=False, default="TALK")  # KEYNOTE, TALK, WORKSHOP, PANEL
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    slides_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    event: Mapped[Event] = relationship(back_populates="sessions")
+    track: Mapped[Track | None] = relationship(back_populates="sessions")
+    speaker: Mapped[Speaker | None] = relationship(back_populates="sessions")
